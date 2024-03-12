@@ -1,0 +1,38 @@
+version: "3.8"
+
+services:
+
+  build-image:
+    build:
+      tags:
+        - test-task-s3-build:latest
+      dockerfile: ci-cd/build/common/Dockerfile
+      context: ../../
+      target: golang
+  deploy-image:
+    build:
+      tags:
+        - test-task-s3-ubuntu:latest
+      dockerfile: ci-cd/build/common/Dockerfile
+      context: ../../
+      target: ubuntu
+  rest-service:
+    build:
+      tags:
+        - test-task-s3-rest-service:latest
+      dockerfile: ci-cd/build/rest-service/Dockerfile
+      context: ../../
+      target: deployable
+    depends_on:
+      - build-image
+      - deploy-image
+  storage-service:
+    build:
+      tags:
+        - test-task-s3-storage-service:latest
+      dockerfile: ci-cd/build/storage-service/Dockerfile
+      context: ../../
+      target: deployable
+    depends_on:
+      - build-image
+      - deploy-image

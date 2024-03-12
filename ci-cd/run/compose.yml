@@ -1,0 +1,18 @@
+version: "3.8"
+
+services:
+
+  rest-service:
+    container_name: "rest-service"
+    image: test-task-s3-rest-service:latest
+    env_file:
+      - ../../.env
+
+  storage-service:
+    image: test-task-s3-storage-service:latest
+    depends_on:
+      - rest-service
+    scale: 6
+    env_file:
+      - ../../.env
+    command: /local/bin/storage-service
