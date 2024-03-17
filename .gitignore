@@ -1,2 +1,9 @@
 .idea
+<<<<<<< Updated upstream
 .env.local
+=======
+.env.local
+*.db
+*/*/*.db
+bin/*
+>>>>>>> Stashed changes

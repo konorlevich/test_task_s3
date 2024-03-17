@@ -3,19 +3,24 @@ package main
 import (
 	"context"
 	"errors"
-	"github.com/konorlevich/test_task_s3/internal/storage-service/handler"
-	"github.com/konorlevich/test_task_s3/internal/storage-service/register"
-	"log"
+
+	log "github.com/sirupsen/logrus"
+
 	"net/http"
 	"net/url"
 	"os"
 	"os/signal"
 	"syscall"
+
+	"github.com/konorlevich/test_task_s3/internal/storage-service/handler"
+	"github.com/konorlevich/test_task_s3/internal/storage-service/register"
+	"github.com/konorlevich/test_task_s3/internal/storage-service/storage"
 )
 
 var (
 	port               = "8080"
 	restServiceBaseUrl = ""
+	storagePath        = "/var/storage"
 )
 
 func init() {
@@ -27,41 +32,53 @@ func init() {
 	if r != "" {
 		restServiceBaseUrl = r
 	}
+	s := os.Getenv("STORAGE_PATH")
+	if s != "" {
+		storagePath = s
+	}
 }
+
 func main() {
+	l := log.New().WithFields(log.Fields{
+		"port":                  port,
+		"rest_service_base_url": restServiceBaseUrl,
+		"storage_path":          storagePath,
+	})
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-
-	server := &http.Server{Addr: ":" + port, Handler: handler.NewHandler()}
+	defer l.Info("got interruption signal")
+	s, err := storage.NewStorage(storagePath, l)
+	if err != nil {
+		l.Fatal(err)
+	}
+	server := &http.Server{Addr: ":" + port, Handler: handler.NewHandler(s)}
 
 	go func() {
-		log.Printf("listening to port %s\n", port)
+		l.Info("listen and serve")
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Fatalf("listen and serve returned err: %v", err)
+			l.WithError(err).Error("listen and serve failed", err)
+			stop()
 		}
 	}()
 	defer func() {
-		if err := server.Shutdown(context.TODO()); err != nil {
-			log.Printf("handler shutdown returned an err: %v\n", err)
+		if err := server.Shutdown(context.Background()); err != nil {
+			l.WithError(err).Fatal("handler shutdown failed")
 		}
 	}()
 
 	hostname, err := os.Hostname()
 	if err != nil {
-		log.Printf("can't get server name: %v\n", err)
-		os.Exit(3)
+		l.WithError(err).Fatal("can't get server name")
 	}
 
+	l = l.WithField("server_url", restServiceBaseUrl)
 	restServiceUrl, err := url.Parse(restServiceBaseUrl)
 	if err != nil {
-		log.Printf("can't parse register server url %s: %s\n", restServiceBaseUrl, err)
-		os.Exit(3)
+		l.WithError(err).Fatal("can't parse register server url", err)
 	}
-	log.Println("registering the service to ", restServiceUrl.String())
+	l.Info("registering the service ", restServiceUrl.String())
 	if err = register.Register(restServiceUrl, hostname, port); err != nil {
-		log.Printf("can't register on server %s: %s\n", hostname, err)
-		os.Exit(3)
+		l.Fatalf("can't register on server %s: %s\n", hostname, err)
 	}
 	<-ctx.Done()
-	log.Println("got interruption signal")
 }

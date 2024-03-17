@@ -5,6 +5,10 @@ services:
   rest-service:
     container_name: "rest-service"
     image: test-task-s3-rest-service:latest
+    ports:
+      - "8080:8080"
+    volumes:
+      - "../../rest-service.db:/var/db/rest-service.db"
     env_file:
       - ../../.env
 

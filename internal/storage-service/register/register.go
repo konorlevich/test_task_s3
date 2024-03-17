@@ -31,6 +31,7 @@ func Register(serverUrl *url.URL, hostName, port string) error {
 	if err != nil {
 		return err
 	}
+	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
 		return fmt.Errorf("returned status code: %d", res.StatusCode)
 	}
