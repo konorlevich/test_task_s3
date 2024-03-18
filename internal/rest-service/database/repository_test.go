@@ -2,12 +2,11 @@ package database
 
 import (
 	"fmt"
-	"log"
 	"testing"
 
-	"github.com/google/uuid"
-
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/uuid"
+	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"gorm.io/gorm"
 )
@@ -15,7 +14,7 @@ import (
 func setup() *Repository {
 	db, err := NewDb("test.db")
 	if err != nil {
-		log.Fatalf("failed to connect database: %v", err)
+		log.WithError(err).Fatalf("failed to connect database")
 	}
 
 	_ = db.AutoMigrate(&Server{}, &Chunk{})

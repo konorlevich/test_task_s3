@@ -3,12 +3,13 @@ package main
 import (
 	"context"
 	"errors"
-	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
 	"syscall"
+
+	log "github.com/sirupsen/logrus"
 
 	"github.com/konorlevich/test_task_s3/internal/rest-service/database"
 	"github.com/konorlevich/test_task_s3/internal/rest-service/handler"
@@ -36,25 +37,30 @@ func init() {
 }
 
 func main() {
+	l := log.New().WithFields(log.Fields{
+		"rest_port": port,
+		"db_file":   dbFile,
+		"chunk_num": chunkNum,
+	})
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	defer log.Println("got interruption signal")
+	defer l.Println("got interruption signal")
 
 	db, err := database.NewDb(dbFile)
 	if err != nil {
-		log.Fatal("failed to open database")
+		l.WithError(err).Fatal("failed to open database")
 	}
 	server := &http.Server{Addr: ":" + port, Handler: handler.NewHandler(database.NewRepository(db), chunkNum)}
 
 	go func() {
-		log.Printf("listening to port %s\n", port)
+		l.Printf("listening to port %s\n", port)
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Fatalf("listen and serve returned err: %v", err)
+			l.WithError(err).Fatal("listen and serve returned err")
 		}
 	}()
 	defer func() {
 		if err := server.Shutdown(context.Background()); err != nil {
-			log.Printf("handler shutdown returned an err: %v\n", err)
+			l.WithError(err).Error("handler shutdown returned an err")
 		}
 	}()
 

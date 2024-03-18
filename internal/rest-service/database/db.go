@@ -2,13 +2,15 @@ package database
 
 import (
 	"database/sql"
+	"io/fs"
+	"os"
+	"path"
 
 	"github.com/google/uuid"
 	sqliteGo "github.com/mattn/go-sqlite3"
 
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
 )
 
 const CustomDriverName = "sqlite3_extended"
@@ -38,7 +40,8 @@ func init() {
 }
 
 func NewDb(file string) (*gorm.DB, error) {
-
+	_ = os.Mkdir(path.Dir(file), fs.ModePerm)
+	_, _ = os.Create(file)
 	conn, err := sql.Open(CustomDriverName, file)
 	if err != nil {
 		return nil, err
@@ -49,7 +52,7 @@ func NewDb(file string) (*gorm.DB, error) {
 		DSN:        file,
 		Conn:       conn,
 	}, &gorm.Config{
-		Logger:                   logger.Default.LogMode(logger.Info),
+		//Logger:                   logger.Default.LogMode(logger.Info),
 		SkipDefaultTransaction:   true,
 		DisableNestedTransaction: true,
 	})

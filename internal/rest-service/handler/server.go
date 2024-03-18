@@ -10,14 +10,12 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/konorlevich/test_task_s3/internal/rest-service/database"
 	"github.com/konorlevich/test_task_s3/internal/rest-service/handler/middleware"
 
 	"github.com/google/uuid"
-
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
-
-	"github.com/konorlevich/test_task_s3/internal/rest-service/database"
 )
 
 type ServerRegistry interface {
@@ -155,11 +153,17 @@ func saveFile(storage StorageRepository, chunkNum int) func(rw http.ResponseWrit
 			fieldNameUsername: rd.username,
 			fieldNameDir:      rd.dir,
 			fieldNameFileName: rd.filename,
+			"chunk_num":       chunkNum,
 		})
 
 		servers, err := storage.GetLeastLoadedServers(chunkNum)
 		if err != nil {
 			l.WithError(err).Errorf("can't get servers")
+			http.Error(rw, "something went wrong, please try later", http.StatusInternalServerError)
+			return
+		}
+		if len(servers) != chunkNum {
+			l.WithField("server_num", len(servers)).Error("unexpected server count")
 			http.Error(rw, "something went wrong, please try later", http.StatusInternalServerError)
 			return
 		}
@@ -169,7 +173,6 @@ func saveFile(storage StorageRepository, chunkNum int) func(rw http.ResponseWrit
 			http.Error(rw, "something went wrong, please try later", http.StatusInternalServerError)
 			return
 		}
-		chunkNum = len(servers)
 		chunkSize := rd.file.header.Size / int64(chunkNum)
 		chunkTail := rd.file.header.Size % int64(chunkNum)
 		eg := &errgroup.Group{}
