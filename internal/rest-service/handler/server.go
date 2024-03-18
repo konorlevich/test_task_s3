@@ -33,22 +33,61 @@ type StorageRepository interface {
 	SaveChunk(file uuid.UUID, server uuid.UUID, number uint) (uuid.UUID, error)
 }
 
-const (
-	chunkNumber = 6
-)
-
-func NewHandler(storageRepository StorageRepository) *http.ServeMux {
+func NewHandler(storageRepository StorageRepository, chunkNum int) *http.ServeMux {
 	handler := http.NewServeMux()
 
-	handler.Handle("GET /object/{dir}/{name}", middleware.CheckAuth(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
-		rd := newRequestData(r)
+	handler.Handle("GET /object/{dir}/{name}", middleware.CheckAuth(http.HandlerFunc(getFile(storageRepository))))
+	handler.Handle("POST /object/{dir}/{name}", middleware.CheckAuth(http.HandlerFunc(saveFile(storageRepository, chunkNum))))
+
+	handler.HandleFunc("POST /storage/register", RegisterStorage(storageRepository))
+	return handler
+}
+
+func getHTTPClient() *http.Client {
+	return &http.Client{
+		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: true,
+			},
+		},
+	}
+}
+
+func RegisterStorage(repository ServerRegistry) func(rw http.ResponseWriter, r *http.Request) {
+	return func(rw http.ResponseWriter, r *http.Request) {
+		err := r.ParseForm()
+		if err != nil || !r.PostForm.Has("hostname") || !r.PostForm.Has("port") {
+			http.Error(rw, "Can't read request data", http.StatusNotAcceptable)
+
+			return
+		}
+		hostname := r.PostForm.Get("hostname")
+		port := r.PostForm.Get("port")
+		if _, err := repository.AddServer(hostname, port); err != nil {
+			http.Error(rw, err.Error(), http.StatusUnprocessableEntity)
+			return
+		}
+		log.Printf("storage service added - %s:%s", hostname, port)
+		rw.WriteHeader(200)
+		_, _ = rw.Write([]byte("added " + hostname))
+	}
+}
+
+func getFile(storage StorageRepository) func(rw http.ResponseWriter, r *http.Request) {
+	return func(rw http.ResponseWriter, r *http.Request) {
+		rd, err := newRequestData(r, log.NewEntry(log.New()))
+		if err != nil {
+			http.Error(rw, err.Error(), http.StatusBadRequest)
+			return
+		}
 		l := log.New().WithFields(log.Fields{
 			fieldNameUsername: rd.username,
 			fieldNameDir:      rd.dir,
-			fieldNameFileName: rd.name,
+			fieldNameFileName: rd.filename,
 		})
 
-		file, err := storageRepository.GetFile(rd.username, rd.dir, rd.name)
+		file, err := storage.GetFile(rd.username, rd.dir, rd.filename)
 		if err != nil || len(file.Chunks) == 0 {
 			l.WithError(err).Error("can't get file from db")
 			http.NotFound(rw, r)
@@ -101,155 +140,111 @@ func NewHandler(storageRepository StorageRepository) *http.ServeMux {
 
 		_, _ = rw.Write(b.Bytes())
 		l.Info("file sent")
-
-	})))
-	handler.Handle("POST /object/{dir}/{name}",
-		middleware.CheckAuth(
-			http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
-				rd := newRequestData(r)
-
-				l := log.New().WithFields(log.Fields{
-					fieldNameUsername: rd.username,
-					fieldNameDir:      rd.dir,
-				})
-
-				if err := r.ParseForm(); err != nil {
-					l.WithError(err).Errorf("can't parse form")
-					http.Error(rw, "Can't parse post form", http.StatusNotAcceptable)
-					return
-				}
-
-				f, fh, err := r.FormFile("file")
-				defer func(f multipart.File) {
-					_ = f.Close()
-				}(f)
-				if err != nil {
-					l.WithError(err).Errorf("can't get form file")
-					http.Error(rw, "can't get file from the request", http.StatusBadRequest)
-					return
-				}
-				servers, err := storageRepository.GetLeastLoadedServers(chunkNumber)
-				if err != nil {
-					l.WithError(err).Errorf("can't get servers")
-					http.Error(rw, "something went wrong, please try later", http.StatusInternalServerError)
-					return
-				}
-				fileId, err := storageRepository.SaveFile(rd.username, rd.dir, rd.name)
-				if err != nil {
-					l.WithError(err).Errorf("can't save file")
-					http.Error(rw, "something went wrong, please try later", http.StatusInternalServerError)
-					return
-				}
-
-				chunkSize := fh.Size / chunkNumber
-				chunkTail := fh.Size % chunkNumber
-				eg := &errgroup.Group{}
-				eg.SetLimit(len(servers))
-				for i := 0; i < len(servers); i++ {
-					var buf []byte
-					if i < len(servers)-1 {
-						buf = make([]byte, chunkSize)
-					} else {
-						buf = make([]byte, chunkSize+chunkTail)
-					}
-					_, err := f.Read(buf)
-					if err != nil && errors.Is(err, io.EOF) {
-						l.WithError(err).Errorf("can't read file chunk")
-						http.Error(rw, "can't read the file, try again", http.StatusInternalServerError)
-
-						return
-					}
-					c := getHTTPClient()
-					server := servers[i]
-					eg.Go(func() error {
-
-						body := &bytes.Buffer{}
-
-						writer := multipart.NewWriter(body)
-
-						formFile, err := writer.CreateFormFile("chunk", fmt.Sprintf("%d", i))
-						if err != nil {
-							return fmt.Errorf("can't create a file field in multipart request body: %w", err)
-						}
-
-						if _, err = io.Copy(formFile, bytes.NewReader(buf)); err != nil {
-							return fmt.Errorf("can't add a file to multipart request body: %w", err)
-						}
-
-						_ = writer.Close()
-						url := fmt.Sprintf("http://%s:%s/object/%s/%s", server.Name, server.Port, rd.username, fileId)
-						req, err := http.NewRequest("POST", url, body)
-						if err != nil {
-							return fmt.Errorf("can't prepare request to %s: %w", server.Name, err)
-						}
-						req.Header.Add("Content-Type", writer.FormDataContentType())
-
-						res, err := c.Do(req)
-						if err != nil {
-							return err
-						}
-						defer res.Body.Close()
-
-						if res.StatusCode != http.StatusOK {
-							body, err := io.ReadAll(res.Body)
-							if err != nil {
-								return fmt.Errorf("cant' read response body: %w", err)
-							}
-							return fmt.Errorf("can't send file to %s: %s", server.Name, body)
-						}
-
-						_, err = storageRepository.SaveChunk(fileId, server.ID, uint(i))
-
-						return err
-					})
-
-					if err := eg.Wait(); err != nil {
-						l.WithError(err).Errorf("can't save file")
-
-						if err = storageRepository.RemoveFile(rd.username, rd.dir, rd.name); err != nil {
-							l.WithError(err).Errorf("can't remove chunks")
-						}
-						http.Error(rw, "something went wrong, please try later", http.StatusInternalServerError)
-						return
-					}
-
-				}
-
-				log.Println("file saved")
-				_, _ = rw.Write([]byte("file saved"))
-			})))
-
-	handler.HandleFunc("POST /storage/register", RegisterStorage(storageRepository))
-	return handler
-}
-
-func getHTTPClient() *http.Client {
-	return &http.Client{
-		Timeout: 30 * time.Second,
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: true,
-			},
-		},
 	}
 }
 
-func RegisterStorage(repository ServerRegistry) func(rw http.ResponseWriter, r *http.Request) {
+func saveFile(storage StorageRepository, chunkNum int) func(rw http.ResponseWriter, r *http.Request) {
 	return func(rw http.ResponseWriter, r *http.Request) {
-		err := r.ParseForm()
-		if err != nil || !r.PostForm.Has("hostname") || !r.PostForm.Has("port") {
-			http.Error(rw, "Can't read request data", http.StatusNotAcceptable)
+		rd, err := newRequestData(r, log.NewEntry(log.New()))
+		if err != nil {
+			http.Error(rw, err.Error(), http.StatusBadRequest)
+			return
+		}
 
+		l := log.New().WithFields(log.Fields{
+			fieldNameUsername: rd.username,
+			fieldNameDir:      rd.dir,
+			fieldNameFileName: rd.filename,
+		})
+
+		servers, err := storage.GetLeastLoadedServers(chunkNum)
+		if err != nil {
+			l.WithError(err).Errorf("can't get servers")
+			http.Error(rw, "something went wrong, please try later", http.StatusInternalServerError)
 			return
 		}
-		hostname := r.PostForm.Get("hostname")
-		port := r.PostForm.Get("port")
-		if _, err := repository.AddServer(hostname, port); err != nil {
-			http.Error(rw, err.Error(), http.StatusUnprocessableEntity)
+		fileId, err := storage.SaveFile(rd.username, rd.dir, rd.filename)
+		if err != nil {
+			l.WithError(err).Errorf("can't save file")
+			http.Error(rw, "something went wrong, please try later", http.StatusInternalServerError)
 			return
 		}
-		log.Printf("storage service added - %s:%s", hostname, port)
-		rw.WriteHeader(200)
-		_, _ = rw.Write([]byte("added " + hostname))
+		chunkNum = len(servers)
+		chunkSize := rd.file.header.Size / int64(chunkNum)
+		chunkTail := rd.file.header.Size % int64(chunkNum)
+		eg := &errgroup.Group{}
+		eg.SetLimit(len(servers))
+		for i := 0; i < len(servers); i++ {
+			var buf []byte
+			if i < len(servers)-1 {
+				buf = make([]byte, chunkSize)
+			} else {
+				buf = make([]byte, chunkSize+chunkTail)
+			}
+			_, err := rd.file.f.Read(buf)
+			if err != nil && errors.Is(err, io.EOF) {
+				l.WithError(err).Errorf("can't read file chunk")
+				http.Error(rw, "can't read the file, try again", http.StatusInternalServerError)
+
+				return
+			}
+			c := getHTTPClient()
+			server := servers[i]
+			eg.Go(func() error {
+
+				body := &bytes.Buffer{}
+
+				writer := multipart.NewWriter(body)
+
+				formFile, err := writer.CreateFormFile("chunk", fmt.Sprintf("%d", i))
+				if err != nil {
+					return fmt.Errorf("can't create a file field in multipart request body: %w", err)
+				}
+
+				if _, err = io.Copy(formFile, bytes.NewReader(buf)); err != nil {
+					return fmt.Errorf("can't add a file to multipart request body: %w", err)
+				}
+
+				_ = writer.Close()
+				url := fmt.Sprintf("http://%s:%s/object/%s/%s", server.Name, server.Port, rd.username, fileId)
+				req, err := http.NewRequest("POST", url, body)
+				if err != nil {
+					return fmt.Errorf("can't prepare request to %s: %w", server.Name, err)
+				}
+				req.Header.Add("Content-Type", writer.FormDataContentType())
+
+				res, err := c.Do(req)
+				if err != nil {
+					return err
+				}
+				defer res.Body.Close()
+
+				if res.StatusCode != http.StatusOK {
+					body, err := io.ReadAll(res.Body)
+					if err != nil {
+						return fmt.Errorf("cant' read response body: %w", err)
+					}
+					return fmt.Errorf("can't send file to %s: %s", server.Name, body)
+				}
+
+				_, err = storage.SaveChunk(fileId, server.ID, uint(i))
+
+				return err
+			})
+
+			if err := eg.Wait(); err != nil {
+				l.WithError(err).Errorf("can't save file")
+
+				if err = storage.RemoveFile(rd.username, rd.dir, rd.filename); err != nil {
+					l.WithError(err).Errorf("can't remove chunks")
+				}
+				http.Error(rw, "something went wrong, please try later", http.StatusInternalServerError)
+				return
+			}
+
+		}
+
+		l.Info("file saved")
+		_, _ = rw.Write([]byte("file saved"))
 	}
 }

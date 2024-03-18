@@ -14,6 +14,7 @@ import (
 const CustomDriverName = "sqlite3_extended"
 
 const DefaultFile = "rest-service.db"
+const DefaultChunkNum = 6
 
 func init() {
 	sql.Register(CustomDriverName,

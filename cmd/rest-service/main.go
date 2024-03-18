@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 
 	"github.com/konorlevich/test_task_s3/internal/rest-service/database"
@@ -15,6 +16,7 @@ import (
 
 var port = "8080"
 var dbFile = database.DefaultFile
+var chunkNum = database.DefaultChunkNum
 
 func init() {
 	p := os.Getenv("REST_PORT")
@@ -25,6 +27,11 @@ func init() {
 	d := os.Getenv("DB_FILE")
 	if d != "" {
 		dbFile = d
+	}
+
+	c, err := strconv.Atoi(os.Getenv("CHUNK_NUM"))
+	if err != nil && c != 0 {
+		chunkNum = c
 	}
 }
 
@@ -37,7 +44,7 @@ func main() {
 	if err != nil {
 		log.Fatal("failed to open database")
 	}
-	server := &http.Server{Addr: ":" + port, Handler: handler.NewHandler(database.NewRepository(db))}
+	server := &http.Server{Addr: ":" + port, Handler: handler.NewHandler(database.NewRepository(db), chunkNum)}
 
 	go func() {
 		log.Printf("listening to port %s\n", port)
