@@ -111,6 +111,7 @@ func getFile(storage StorageRepository) func(rw http.ResponseWriter, r *http.Req
 					return fmt.Errorf("can't get chunk from %s: %w", chunk.Server.Name, err)
 				}
 				defer res.Body.Close()
+
 				b, err := io.ReadAll(res.Body)
 				if err != nil {
 					return fmt.Errorf("can't read chunk from %s: %w", chunk.Server.Name, err)
@@ -178,37 +179,40 @@ func saveFile(storage StorageRepository, chunkNum int) func(rw http.ResponseWrit
 		eg := &errgroup.Group{}
 		eg.SetLimit(len(servers))
 		for i := 0; i < len(servers); i++ {
-			var buf []byte
-			if i < len(servers)-1 {
-				buf = make([]byte, chunkSize)
-			} else {
-				buf = make([]byte, chunkSize+chunkTail)
+			body := &bytes.Buffer{}
+
+			writer := multipart.NewWriter(body)
+
+			formFile, err := writer.CreateFormFile("chunk", fmt.Sprintf("%d", i))
+			if err != nil {
+				l.WithError(err).Errorf("can't create a file field")
+				http.Error(rw, "can't create a file field in multipart request body", http.StatusInternalServerError)
+
+				return
+
 			}
-			_, err := rd.file.f.Read(buf)
-			if err != nil && errors.Is(err, io.EOF) {
+
+			var chunkLen int64
+			if i < len(servers)-1 {
+				chunkLen = chunkSize
+			} else {
+				chunkLen = chunkSize + chunkTail
+			}
+
+			if _, err := io.CopyN(formFile, rd.file.f, chunkLen); err != nil && errors.Is(err, io.EOF) {
 				l.WithError(err).Errorf("can't read file chunk")
 				http.Error(rw, "can't read the file, try again", http.StatusInternalServerError)
 
 				return
 			}
+
+			_ = writer.Close()
+
 			c := getHTTPClient()
 			server := servers[i]
+
 			eg.Go(func() error {
 
-				body := &bytes.Buffer{}
-
-				writer := multipart.NewWriter(body)
-
-				formFile, err := writer.CreateFormFile("chunk", fmt.Sprintf("%d", i))
-				if err != nil {
-					return fmt.Errorf("can't create a file field in multipart request body: %w", err)
-				}
-
-				if _, err = io.Copy(formFile, bytes.NewReader(buf)); err != nil {
-					return fmt.Errorf("can't add a file to multipart request body: %w", err)
-				}
-
-				_ = writer.Close()
 				url := fmt.Sprintf("http://%s:%s/object/%s/%s", server.Name, server.Port, rd.username, fileId)
 				req, err := http.NewRequest("POST", url, body)
 				if err != nil {
