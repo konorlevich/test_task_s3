@@ -42,7 +42,7 @@ func newRequestData(r *http.Request, logger *log.Entry) (*requestData, error) {
 	})
 
 	//TODO: use http.MaxBytesReader instead?
-	err := r.ParseMultipartForm(128 << 20) // 128Mb
+	err := r.ParseMultipartForm(1024 << 20) // 1024Mb
 	if err != nil {
 		l.WithError(err).Error(errCantParseForm)
 		return nil, errCantParseForm
