@@ -270,7 +270,29 @@ func TestRepository_RemoveFile(t *testing.T) {
 		t.Fatalf("can't remove file")
 	}
 	_, err = repo.GetFile("RemoveFile_user", "RemoveFile_dir", "RemoveFile_file")
-	if assert.Error(t, err) {
-		assert.Equal(t, gorm.ErrRecordNotFound, err)
+	assert.Error(t, err)
+	assert.Equal(t, ErrRecordNotFound, err)
+}
+
+func TestRepository_SaveFile(t *testing.T) {
+	repo := setup()
+	tests := []struct {
+		name     string
+		user     string
+		dir      string
+		filename string
+		wantErr  error
+	}{
+		{name: "valid", user: "SaveFile_user0", dir: "SaveFile_dir0", filename: "SaveFile_name0"},
+		{name: "duplicated", user: "SaveFile_user0", dir: "SaveFile_dir0", filename: "SaveFile_name0", wantErr: ErrDuplicated},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := repo.SaveFile(tt.user, tt.dir, tt.filename)
+			if tt.wantErr == nil {
+				assert.NotEqual(t, uuid.Nil, got)
+			}
+			assert.ErrorIs(t, err, tt.wantErr)
+		})
 	}
 }
