@@ -138,7 +138,7 @@ func TestNewRequestData(t *testing.T) {
 		{
 			description:   "Failure to parse multipart form",
 			request:       httptest.NewRequest("POST", "http://example.com/upload", strings.NewReader("bad content")),
-			expectedError: errNoFile,
+			expectedError: errCantParseForm,
 			verifyResponse: func(t *testing.T, rd *requestData, err error) {
 			},
 		},
