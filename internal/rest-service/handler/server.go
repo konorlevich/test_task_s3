@@ -34,7 +34,7 @@ type StorageRepository interface {
 func NewHandler(storageRepository StorageRepository, chunkNum int) *http.ServeMux {
 	handler := http.NewServeMux()
 
-	handler.Handle("GET /object/{dir}/{name}", middleware.CheckAuth(http.HandlerFunc(getFile(storageRepository))))
+	handler.Handle("GET /object/{dir}/{name}", middleware.CheckAuth(http.HandlerFunc(getFileHandler(storageRepository))))
 	handler.Handle("POST /object/{dir}/{name}", middleware.CheckAuth(http.HandlerFunc(saveFile(storageRepository, chunkNum))))
 
 	handler.HandleFunc("POST /storage/register", RegisterStorage(storageRepository))
@@ -72,7 +72,7 @@ func RegisterStorage(repository ServerRegistry) func(rw http.ResponseWriter, r *
 	}
 }
 
-func getFile(storage StorageRepository) func(rw http.ResponseWriter, r *http.Request) {
+func getFileHandler(storage StorageRepository) func(rw http.ResponseWriter, r *http.Request) {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		rd, err := newRequestData(r, log.NewEntry(log.New()))
 		if err != nil {
@@ -92,7 +92,7 @@ func getFile(storage StorageRepository) func(rw http.ResponseWriter, r *http.Req
 			return
 		}
 		l.WithField("fileId", file.ID)
-		b, err := assembleFile(file, l)
+		b, err := getFile(file, l)
 		if err != nil || len(file.Chunks) == 0 {
 			l.WithError(err).Error("can't assemble the file")
 			http.Error(rw, "can't assemble the file", http.StatusInternalServerError)
@@ -181,7 +181,6 @@ func saveFile(storage StorageRepository, chunkNum int) func(rw http.ResponseWrit
 			server := servers[i]
 
 			eg.Go(func() error {
-
 				url := fmt.Sprintf("http://%s:%s/object/%s/%s", server.Name, server.Port, rd.username, fileId)
 				req, err := http.NewRequest("POST", url, body)
 				if err != nil {
@@ -225,7 +224,7 @@ func saveFile(storage StorageRepository, chunkNum int) func(rw http.ResponseWrit
 	}
 }
 
-func assembleFile(f *database.File, l *log.Entry) (io.Reader, error) {
+func getFile(f *database.File, l *log.Entry) (io.Reader, error) {
 	eg := &errgroup.Group{}
 	eg.SetLimit(len(f.Chunks))
 	chunkReaders := make([]io.Reader, len(f.Chunks))
