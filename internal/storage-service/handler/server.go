@@ -14,7 +14,7 @@ const (
 )
 
 type Storage interface {
-	SaveFile(path string, file io.ReadCloser) error
+	SaveFile(p string, file io.Reader) error
 	GetFile(filePath string) (io.Reader, error)
 }
 
@@ -74,6 +74,11 @@ func NewHandler(storage Storage) *http.ServeMux {
 			http.Error(rw, "can't save file", http.StatusInternalServerError)
 			return
 		}
+		defer func(file io.Closer) {
+			if err := file.Close(); err != nil {
+				l.WithError(err).Error("can't close temp file")
+			}
+		}(rd.file)
 
 		l.Info("chunk saved")
 		_, _ = rw.Write([]byte("chunk saved"))

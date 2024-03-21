@@ -2,7 +2,6 @@ package storage
 
 import (
 	"errors"
-	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -12,10 +11,15 @@ import (
 )
 
 var (
+	ErrCantCreateStorage = errors.New("can't create chunk storage dir")
+
+	ErrNothingToSave       = errors.New("empty input file")
 	ErrCantCreateChunkFile = errors.New("can't create chunk file")
 	ErrCantWriteChunkFile  = errors.New("can't write chunk file")
+	ErrCantCloseChunkFile  = errors.New("can't close chunk file")
 	ErrCantCreateChunkDir  = errors.New("can't create chunk storage dir")
 
+	ErrIsNotAFile    = errors.New("can't find the chunk")
 	ErrCantFindChunk = errors.New("can't find the chunk")
 	ErrCantReadChunk = errors.New("can't read the chunk file")
 )
@@ -28,10 +32,13 @@ type Storage struct {
 func (s *Storage) GetFile(p string) (io.Reader, error) {
 	chunkFilePath := path.Join(s.path, p)
 
-	if _, err := os.Stat(chunkFilePath); err != nil {
+	if fInfo, err := os.Stat(chunkFilePath); err != nil {
 		s.l.WithError(err).Error(ErrCantFindChunk)
 		return nil, ErrCantFindChunk
+	} else if !fInfo.Mode().IsRegular() {
+		return nil, ErrIsNotAFile
 	}
+
 	f, err := os.OpenFile(chunkFilePath, os.O_RDONLY, 0666)
 	if err != nil {
 		s.l.WithError(err).Error(ErrCantReadChunk)
@@ -40,12 +47,10 @@ func (s *Storage) GetFile(p string) (io.Reader, error) {
 	return f, nil
 }
 
-func (s *Storage) SaveFile(p string, file io.ReadCloser) error {
-	defer func(file io.Closer) {
-		if err := file.Close(); err != nil {
-			s.l.WithError(err).Error("can't close temp file")
-		}
-	}(file)
+func (s *Storage) SaveFile(p string, file io.Reader) error {
+	if file == nil {
+		return ErrNothingToSave
+	}
 
 	chunkFilePath := path.Join(s.path, p)
 	chunkDir := path.Dir(chunkFilePath)
@@ -62,11 +67,6 @@ func (s *Storage) SaveFile(p string, file io.ReadCloser) error {
 		s.l.WithField("chunk_path", chunkFilePath).WithError(err).Error(ErrCantCreateChunkFile)
 		return ErrCantCreateChunkFile
 	}
-	defer func(chunk io.Closer) {
-		if err := chunk.Close(); err != nil {
-			s.l.WithError(err).Error("can't close chunk file")
-		}
-	}(chunk)
 
 	if n, err := io.Copy(chunk, file); err != nil {
 		s.l.WithError(err).Error(ErrCantWriteChunkFile)
@@ -74,13 +74,18 @@ func (s *Storage) SaveFile(p string, file io.ReadCloser) error {
 	} else {
 		s.l.WithField("size", n).Debug("chunk file written")
 	}
+	if err = chunk.Close(); err != nil {
+		s.l.WithError(err).Error(ErrCantCloseChunkFile)
+		return ErrCantCloseChunkFile
+	}
 	return nil
 }
 
 func NewStorage(basePath string, l *log.Entry) (*Storage, error) {
 	storagePath := path.Join(basePath, "chunks")
 	if err := os.MkdirAll(storagePath, fs.ModePerm); err != nil {
-		return nil, fmt.Errorf("can't create chunk storage dir: %w", err)
+		l.WithError(err).Error(ErrCantCreateStorage)
+		return nil, ErrCantCreateStorage
 	}
 	return &Storage{path: storagePath, l: l.WithField("storage_base_path", storagePath)}, nil
 }
