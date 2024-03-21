@@ -25,14 +25,14 @@ type Storage struct {
 	l    *log.Entry
 }
 
-func (s *Storage) GetFile(p string) ([]byte, error) {
+func (s *Storage) GetFile(p string) (io.Reader, error) {
 	chunkFilePath := path.Join(s.path, p)
 
 	if _, err := os.Stat(chunkFilePath); err != nil {
 		s.l.WithError(err).Error(ErrCantFindChunk)
 		return nil, ErrCantFindChunk
 	}
-	f, err := os.ReadFile(chunkFilePath)
+	f, err := os.OpenFile(chunkFilePath, os.O_RDONLY, 0666)
 	if err != nil {
 		s.l.WithError(err).Error(ErrCantReadChunk)
 		return nil, ErrCantReadChunk
@@ -41,7 +41,7 @@ func (s *Storage) GetFile(p string) ([]byte, error) {
 }
 
 func (s *Storage) SaveFile(p string, file io.ReadCloser) error {
-	defer func(file io.ReadCloser) {
+	defer func(file io.Closer) {
 		if err := file.Close(); err != nil {
 			s.l.WithError(err).Error("can't close temp file")
 		}
@@ -62,15 +62,17 @@ func (s *Storage) SaveFile(p string, file io.ReadCloser) error {
 		s.l.WithField("chunk_path", chunkFilePath).WithError(err).Error(ErrCantCreateChunkFile)
 		return ErrCantCreateChunkFile
 	}
-	defer func(chunk *os.File) {
+	defer func(chunk io.Closer) {
 		if err := chunk.Close(); err != nil {
-			log.WithError(err).Error("can't close chunk file")
+			s.l.WithError(err).Error("can't close chunk file")
 		}
 	}(chunk)
 
-	if _, err := io.Copy(chunk, file); err != nil {
-		log.WithError(err).Error(ErrCantWriteChunkFile)
+	if n, err := io.Copy(chunk, file); err != nil {
+		s.l.WithError(err).Error(ErrCantWriteChunkFile)
 		return ErrCantWriteChunkFile
+	} else {
+		s.l.WithField("size", n).Debug("chunk file written")
 	}
 	return nil
 }

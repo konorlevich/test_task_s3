@@ -15,7 +15,7 @@ const (
 
 type Storage interface {
 	SaveFile(path string, file io.ReadCloser) error
-	GetFile(filePath string) ([]byte, error)
+	GetFile(filePath string) (io.Reader, error)
 }
 
 func NewHandler(storage Storage) *http.ServeMux {
@@ -45,8 +45,13 @@ func NewHandler(storage Storage) *http.ServeMux {
 			return
 		}
 
-		_, _ = rw.Write(f)
-		l.Info("chunk sent")
+		if i, err := io.Copy(rw, f); err != nil {
+			l.Error(err)
+			http.Error(rw, err.Error(), http.StatusInternalServerError)
+			return
+		} else {
+			l.WithField("size", i).Debug("chunk sent")
+		}
 	})
 
 	handler.HandleFunc(urlPatternSaveChunk, func(rw http.ResponseWriter, r *http.Request) {
