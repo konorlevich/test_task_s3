@@ -50,7 +50,7 @@ func main() {
 	if err != nil {
 		l.WithError(err).Fatal("failed to open database")
 	}
-	server := &http.Server{Addr: ":" + port, Handler: handler.NewHandler(database.NewRepository(db), chunkNum)}
+	server := &http.Server{Addr: ":" + port, Handler: handler.NewHandler(database.NewRepository(db), chunkNum, l)}
 
 	go func() {
 		l.Printf("listening to port %s\n", port)

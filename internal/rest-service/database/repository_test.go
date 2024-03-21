@@ -1,8 +1,11 @@
 package database
 
 import (
+	"errors"
 	"fmt"
 	"testing"
+
+	"github.com/google/go-cmp/cmp/cmpopts"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/uuid"
@@ -65,7 +68,7 @@ func TestRepository_GetLeastLoadedServer(t *testing.T) {
 			t.Fatalf("can't save server: %s", err)
 		}
 		saved = append(saved, server)
-		file, err := repo.SaveFile("username_GetLeastLoadedServer", "dir_GetLeastLoadedServer", fmt.Sprintf("GetLeastLoadedServer_%d", i))
+		file, err := repo.CreateFile("username_GetLeastLoadedServer", "dir_GetLeastLoadedServer", fmt.Sprintf("GetLeastLoadedServer_%d", i))
 		if err != nil {
 			t.Fatalf("can't save file: %s", err)
 		}
@@ -77,8 +80,9 @@ func TestRepository_GetLeastLoadedServer(t *testing.T) {
 	}
 
 	tests := []struct {
-		num  int
-		want []*Server
+		num     int
+		want    []*Server
+		wantErr error
 	}{
 		{num: 0, want: []*Server{}},
 		{num: 1,
@@ -95,13 +99,17 @@ func TestRepository_GetLeastLoadedServer(t *testing.T) {
 				{ID: saved[1], Name: "GetLeastLoadedServer1", Port: "123"},
 				{ID: saved[2], Name: "GetLeastLoadedServer2", Port: "123"},
 			}},
+		{num: 20,
+			wantErr: ErrUnexpectedServerCount},
 	}
 
 	for _, tt := range tests {
-		t.Run("", func(t *testing.T) {
+		t.Run(fmt.Sprintf("%d", tt.num), func(t *testing.T) {
 			servers, err := repo.GetLeastLoadedServers(tt.num)
-			if err != nil {
-				t.Errorf("GetLeastLoadedServer() error = %v", err)
+			if !errors.Is(err, tt.wantErr) {
+				t.Errorf(
+					"GetLeastLoadedServer() unexpected error\n%s",
+					cmp.Diff(tt.wantErr, err, cmpopts.EquateErrors()))
 			}
 			if diff := cmp.Diff(tt.want, servers); diff != "" {
 				t.Errorf("GetLeastLoadedServer():\n%s", diff)
@@ -175,7 +183,7 @@ func TestRepository_GetFiles(t *testing.T) {
 	}
 	files := make([]uuid.UUID, 3)
 	for i := 0; i < 3; i++ {
-		fileId, err := repo.SaveFile("username3", "dir", fmt.Sprintf("GetFiles_%d", i))
+		fileId, err := repo.CreateFile("username3", "dir", fmt.Sprintf("GetFiles_%d", i))
 		if err != nil {
 			t.Fatalf("can't save file: %s", err)
 		}
@@ -240,7 +248,7 @@ func TestRepository_RemoveFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("can't prepare test: %s", err)
 	}
-	fileId, err := repo.SaveFile("RemoveFile_user", "RemoveFile_dir", "RemoveFile_file")
+	fileId, err := repo.CreateFile("RemoveFile_user", "RemoveFile_dir", "RemoveFile_file")
 	if err != nil {
 		t.Fatalf("can't prepare test: %s", err)
 	}
@@ -266,7 +274,7 @@ func TestRepository_RemoveFile(t *testing.T) {
 		assert.Equal(t, chunk.File.ID, fileId)
 	}
 
-	if err := repo.RemoveFile("RemoveFile_user", "RemoveFile_dir", "RemoveFile_file"); err != nil {
+	if err := repo.RemoveFile(fileId); err != nil {
 		t.Fatalf("can't remove file")
 	}
 	_, err = repo.GetFile("RemoveFile_user", "RemoveFile_dir", "RemoveFile_file")
@@ -274,7 +282,7 @@ func TestRepository_RemoveFile(t *testing.T) {
 	assert.Equal(t, ErrRecordNotFound, err)
 }
 
-func TestRepository_SaveFile(t *testing.T) {
+func TestRepository_CreateFile(t *testing.T) {
 	repo := setup()
 	tests := []struct {
 		name     string
@@ -288,7 +296,7 @@ func TestRepository_SaveFile(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := repo.SaveFile(tt.user, tt.dir, tt.filename)
+			got, err := repo.CreateFile(tt.user, tt.dir, tt.filename)
 			if tt.wantErr == nil {
 				assert.NotEqual(t, uuid.Nil, got)
 			}

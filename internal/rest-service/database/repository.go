@@ -10,8 +10,11 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-var ErrRecordNotFound = errors.New("record not found")
-var ErrDuplicated = errors.New("record duplicated")
+var (
+	ErrRecordNotFound        = errors.New("record not found")
+	ErrDuplicated            = errors.New("record duplicated")
+	ErrUnexpectedServerCount = errors.New("unexpected server count")
+)
 
 type Repository struct {
 	db *gorm.DB
@@ -38,10 +41,13 @@ func (r *Repository) GetLeastLoadedServers(num int) ([]*Server, error) {
 		Limit(num).
 		Find(&res)
 
+	if len(res) != num {
+		return nil, ErrUnexpectedServerCount
+	}
 	return res, tx.Error
 }
 
-func (r *Repository) SaveFile(user, dir, name string) (uuid.UUID, error) {
+func (r *Repository) CreateFile(user, dir, name string) (uuid.UUID, error) {
 	f := &File{
 		User: user,
 		Dir:  dir,
@@ -62,8 +68,8 @@ func (r *Repository) GetFile(username, dir, name string) (*File, error) {
 	return c, checkError(err)
 }
 
-func (r *Repository) RemoveFile(username, dir, name string) error {
-	return checkError(r.db.Delete(&File{}, &File{User: username, Dir: dir, Name: name}).Error)
+func (r *Repository) RemoveFile(id uuid.UUID) error {
+	return checkError(r.db.Delete(&File{}, &File{ID: id}).Error)
 }
 
 func (r *Repository) SaveChunk(file uuid.UUID, server uuid.UUID, number uint) (uuid.UUID, error) {
