@@ -92,52 +92,18 @@ func getFile(storage StorageRepository) func(rw http.ResponseWriter, r *http.Req
 			return
 		}
 		l.WithField("fileId", file.ID)
-		eg := &errgroup.Group{}
-		eg.SetLimit(len(file.Chunks))
-		chunkData := make([][]byte, len(file.Chunks))
-		for _, chunk := range file.Chunks {
-			c := getHTTPClient()
-			eg.Go(func() error {
-				url := fmt.Sprintf(
-					"http://%s:%s/object/%s/%s/%d",
-					chunk.Server.Name, chunk.Server.Port, file.User, file.ID, chunk.Number)
-				req, err := http.NewRequest("GET", url, nil)
-				if err != nil {
-					return fmt.Errorf("can't prepare request to %s: %w", chunk.Server.Name, err)
-				}
-
-				res, err := c.Do(req)
-				if err != nil {
-					return fmt.Errorf("can't get chunk from %s: %w", chunk.Server.Name, err)
-				}
-				defer res.Body.Close()
-
-				b, err := io.ReadAll(res.Body)
-				if err != nil {
-					return fmt.Errorf("can't read chunk from %s: %w", chunk.Server.Name, err)
-				}
-				chunkData[chunk.Number] = b
-				return nil
-			})
-		}
-		if err := eg.Wait(); err != nil {
-			l.WithError(err).Error("can't get chunks from storage")
-			http.Error(rw, "can't get chunks from storage", http.StatusInternalServerError)
+		b, err := assembleFile(file, l)
+		if err != nil || len(file.Chunks) == 0 {
+			l.WithError(err).Error("can't assemble the file")
+			http.Error(rw, "can't assemble the file", http.StatusInternalServerError)
 
 			return
 		}
 
-		b := &bytes.Buffer{}
-		for _, chunk := range chunkData {
-			if _, err := b.Write(chunk); err != nil {
-				l.WithError(err).Error("can't join chunks to a file")
-				http.Error(rw, "can't join chunks to a file", http.StatusInternalServerError)
-
-				return
-			}
+		if _, err := io.Copy(rw, b); err != nil {
+			l.WithError(err).Error("can't return the file")
+			http.Error(rw, "can't return the file", http.StatusInternalServerError)
 		}
-
-		_, _ = rw.Write(b.Bytes())
 		l.Info("file sent")
 	}
 }
@@ -155,6 +121,7 @@ func saveFile(storage StorageRepository, chunkNum int) func(rw http.ResponseWrit
 			fieldNameDir:      rd.dir,
 			fieldNameFileName: rd.filename,
 			"chunk_num":       chunkNum,
+			"file_size":       rd.file.header.Size,
 		})
 
 		servers, err := storage.GetLeastLoadedServers(chunkNum)
@@ -199,11 +166,13 @@ func saveFile(storage StorageRepository, chunkNum int) func(rw http.ResponseWrit
 				chunkLen = chunkSize + chunkTail
 			}
 
-			if _, err := io.CopyN(formFile, rd.file.f, chunkLen); err != nil && errors.Is(err, io.EOF) {
+			if n, err := io.CopyN(formFile, rd.file.f, chunkLen); err != nil && errors.Is(err, io.EOF) {
 				l.WithError(err).Errorf("can't read file chunk")
 				http.Error(rw, "can't read the file, try again", http.StatusInternalServerError)
 
 				return
+			} else {
+				l.WithField("size", n).Debug("chunk file written")
 			}
 
 			_ = writer.Close()
@@ -254,4 +223,42 @@ func saveFile(storage StorageRepository, chunkNum int) func(rw http.ResponseWrit
 		l.Info("file saved")
 		_, _ = rw.Write([]byte("file saved"))
 	}
+}
+
+func assembleFile(f *database.File, l *log.Entry) (io.Reader, error) {
+	eg := &errgroup.Group{}
+	eg.SetLimit(len(f.Chunks))
+	chunkReaders := make([]io.Reader, len(f.Chunks))
+	for _, chunk := range f.Chunks {
+		c := getHTTPClient()
+		eg.Go(func() error {
+			url := fmt.Sprintf(
+				"http://%s:%s/object/%s/%s/%d",
+				chunk.Server.Name, chunk.Server.Port, f.User, f.ID, chunk.Number)
+			req, err := http.NewRequest("GET", url, nil)
+			if err != nil {
+				return fmt.Errorf("can't prepare request to %s: %w", chunk.Server.Name, err)
+			}
+
+			res, err := c.Do(req)
+			if err != nil {
+				return fmt.Errorf("can't get chunk from %s: %w", chunk.Server.Name, err)
+			}
+			defer res.Body.Close()
+			c := &bytes.Buffer{}
+
+			if _, err := io.Copy(c, res.Body); err != nil {
+				return fmt.Errorf("can't read chunk from %s: %w", chunk.Server.Name, err)
+			}
+			chunkReaders[chunk.Number] = c
+
+			return nil
+		})
+	}
+	if err := eg.Wait(); err != nil {
+		l.WithError(err).Error("can't get chunks from storage")
+
+		return nil, err
+	}
+	return io.MultiReader(chunkReaders...), nil
 }
