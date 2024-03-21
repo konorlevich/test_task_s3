@@ -47,7 +47,7 @@ func newRequestData(r *http.Request, logger *log.Entry) (*requestData, error) {
 		return rd, nil
 	}
 
-	if err := r.ParseForm(); err != nil {
+	if err := r.ParseMultipartForm(1024 << 20); err != nil { // 1024Mb
 		l.WithError(err).Error(errCantParseForm)
 		return nil, errCantParseForm
 	}

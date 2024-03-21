@@ -269,7 +269,7 @@ func TestRepository_RemoveFile(t *testing.T) {
 	if err := repo.RemoveFile("RemoveFile_user", "RemoveFile_dir", "RemoveFile_file"); err != nil {
 		t.Fatalf("can't remove file")
 	}
-	f, err = repo.GetFile("RemoveFile_user", "RemoveFile_dir", "RemoveFile_file")
+	_, err = repo.GetFile("RemoveFile_user", "RemoveFile_dir", "RemoveFile_file")
 	if assert.Error(t, err) {
 		assert.Equal(t, gorm.ErrRecordNotFound, err)
 	}
