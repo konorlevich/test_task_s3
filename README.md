@@ -1,4 +1,5 @@
 # Golang Developer Test
+[![codecov](https://codecov.io/gh/konorlevich/test_task_s3/branch/main/graph/badge.svg?token=UUMXRBBK6X)](https://app.codecov.io/gh/konorlevich/test_task_s3)
 
 ## Description
 
